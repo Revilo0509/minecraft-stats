@@ -3,10 +3,12 @@ use diesel::SelectableHelper;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use log::debug;
 use std::path::Path;
+use tokio::fs;
 use uuid::Uuid;
 
 use crate::models::{NewPlayer, Player};
 use crate::mojang_utils::MojangCache;
+use crate::stat_file::StatsFile;
 
 pub async fn establish_connection(url: &str) -> AsyncPgConnection {
     AsyncPgConnection::establish(url)
@@ -26,28 +28,32 @@ async fn insert_player(database: &mut AsyncPgConnection, player: NewPlayer) -> R
         .map_err(|e| anyhow!(e))
 }
 
+async fn insert_stats(database: &mut AsyncPgConnection, )
+
+// TODO: Implement a connection pool and make this parrarel
 pub async fn populate_database(
     database: &mut AsyncPgConnection,
     stats_folder: &Path,
     mojang_cache: &MojangCache,
-) {
+) -> Result<()> {
     debug!("Using stats folder: {:?}", stats_folder);
 
-    for entry in stats_folder
-        .read_dir()
-        .expect("Failed to read stats directory")
-    {
-        let entry = entry.expect("Failed to read entry");
+    let mut dir_entries = fs::read_dir(stats_folder).await?;
+
+    while let Some(entry) = dir_entries.next_entry().await? {
         let path = entry.path();
 
         if path.extension().map_or(false, |ext| ext == "json") {
             let file_stem = path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .expect("Failed to get file stem");
+                .ok_or_else(|| anyhow!("Failed to get file stem for {:?}", path))?;
 
             let player_uuid = Uuid::parse_str(file_stem)
-                .expect(&format!("Invalid UUID in filename: {}", file_stem));
+                .map_err(|e| anyhow!("Invalid UUID in filename {}: {:?}", file_stem, e))?;
+
+            let stats_content = fs::read_to_string(&path).await?;
+            let player_stats: StatsFile = serde_json::from_str(&stats_content)?;
 
             let player_name = mojang_cache
                 .uuid_to_username(&player_uuid)
@@ -66,4 +72,6 @@ pub async fn populate_database(
             }
         }
     }
+
+    Ok(())
 }

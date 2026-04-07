@@ -28,5 +28,5 @@ async fn main() {
 
     let mut database_connection = establish_connection(&database_url).await;
 
-    populate_database(&mut database_connection, &stats_folder, &mojang_cache).await;
+    let _ = populate_database(&mut database_connection, &stats_folder, &mojang_cache).await;
 }
