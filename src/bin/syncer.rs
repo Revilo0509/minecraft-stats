@@ -1,78 +1,20 @@
 use std::{env, path::PathBuf, sync::Arc};
 
 use dotenvy::dotenv;
-use minecraft_stats::{
-    database::DatabaseConnection,
-    models::{Player, StatsFile},
-    mojang_utils::UsernameCache,
-};
+use minecraft_stats::{database::DatabaseConnection, mojang_utils::UsernameCache};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 async fn handle_stats_file_change(
     db: &DatabaseConnection,
     path: &PathBuf,
     username_cache: &UsernameCache,
 ) {
-    let file_stem = match path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => {
-            log::error!("Failed to get file stem for {:?}", path);
-            return;
-        }
-    };
-
-    let player_uuid = match Uuid::parse_str(file_stem) {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            log::error!("Invalid UUID in filename {}: {:?}", file_stem, e);
-            return;
-        }
-    };
-
-    log::info!("Processing stats file for player: {}", player_uuid);
-
-    let stats_content = match tokio::fs::read_to_string(path).await {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("Failed to read stats file: {:?}", e);
-            return;
-        }
-    };
-
-    let player_stats: StatsFile = match serde_json::from_str(&stats_content) {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("Failed to parse stats file: {:?}", e);
-            return;
-        }
-    };
-
-    let player_name = username_cache
-        .uuid_to_username(&player_uuid)
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    log::info!("Updating player: {} ({})", player_name, player_uuid);
-
-    if let Err(e) = db
-        .insert_player(Player {
-            player_uuid,
-            name: player_name.clone(),
-        })
-        .await
-    {
-        log::error!("Error inserting player {}: {:?}", player_name, e);
-    }
-
-    match db.insert_stats(player_uuid, player_stats).await {
-        Ok(_) => log::info!(
-            "Successfully synced stats for player: {} ({})",
-            player_name,
-            player_uuid
-        ),
-        Err(e) => log::error!("Error inserting stats for player {}: {:?}", player_name, e),
+    if let Err(e) = db.process_stats_file(path, username_cache).await {
+        log::error!("Error processing stats file {:?}: {:?}", path, e);
+    } else {
+        log::info!("Successfully synced stats for file: {:?}", path);
     }
 }
 

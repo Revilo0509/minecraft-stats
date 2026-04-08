@@ -34,17 +34,17 @@ struct AppState {
 }
 
 async fn categories(State(app_state): State<AppState>) -> impl IntoResponse {
-    let mut conn = match app_state.database_connection.get().await {
-        Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    let categories: Vec<StatCategorie> = match stat_categories::table.load(&mut conn).await {
-        Ok(data) => data,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    Json(categories).into_response()
+    match app_state.database_connection.get().await {
+        Ok(mut conn) => {
+            let categories: Vec<StatCategorie> = match stat_categories::table.load(&mut conn).await
+            {
+                Ok(data) => data,
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            Json(categories).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn categorie(
@@ -52,11 +52,6 @@ async fn categorie(
     Path(categorie): Path<String>,
     Query(params): Query<SearchParams>,
 ) -> impl IntoResponse {
-    let mut conn = match app_state.database_connection.get().await {
-        Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT);
     let offset = (params.page.unwrap_or(1).max(1) - 1) * limit;
     let (sort_by, order) = (
@@ -64,55 +59,60 @@ async fn categorie(
         params.order.as_deref().unwrap_or("desc"),
     );
 
-    let categories: Vec<StatCategorie> = match stat_categories::table
-        .filter(stat_categories::name.eq(&categorie))
-        .limit(1)
-        .load(&mut conn)
-        .await
-    {
-        Ok(data) => data,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    match app_state.database_connection.get().await {
+        Ok(mut conn) => {
+            let categories: Vec<StatCategorie> = match stat_categories::table
+                .filter(stat_categories::name.eq(&categorie))
+                .limit(1)
+                .load(&mut conn)
+                .await
+            {
+                Ok(data) => data,
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
 
-    let category = match categories.into_iter().next() {
-        Some(c) => c,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
+            let category = match categories.into_iter().next() {
+                Some(c) => c,
+                None => return StatusCode::NOT_FOUND.into_response(),
+            };
 
-    let query = player_stats::table
-        .filter(player_stats::stat_categories_id.eq(category.id))
-        .into_boxed();
-    let query = if sort_by == "stat_name" {
-        if order == "asc" {
-            query.order(player_stats::stat_name.asc())
-        } else {
-            query.order(player_stats::stat_name.desc())
+            let query = player_stats::table
+                .filter(player_stats::stat_categories_id.eq(category.id))
+                .into_boxed();
+            let query = if sort_by == "stat_name" {
+                if order == "asc" {
+                    query.order(player_stats::stat_name.asc())
+                } else {
+                    query.order(player_stats::stat_name.desc())
+                }
+            } else if order == "asc" {
+                query.order(player_stats::value.asc())
+            } else {
+                query.order(player_stats::value.desc())
+            };
+            let stats: Vec<PlayerStats> =
+                match query.limit(limit).offset(offset).load(&mut conn).await {
+                    Ok(data) => data,
+                    Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                };
+
+            Json(serde_json::json!({ "category": category, "stats": stats })).into_response()
         }
-    } else if order == "asc" {
-        query.order(player_stats::value.asc())
-    } else {
-        query.order(player_stats::value.desc())
-    };
-    let stats: Vec<PlayerStats> = match query.limit(limit).offset(offset).load(&mut conn).await {
-        Ok(data) => data,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    Json(serde_json::json!({ "category": category, "stats": stats })).into_response()
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn players(State(app_state): State<AppState>) -> impl IntoResponse {
-    let mut conn = match app_state.database_connection.get().await {
-        Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    let players: Vec<Player> = match players::table.load(&mut conn).await {
-        Ok(data) => data,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
-    Json(players).into_response()
+    match app_state.database_connection.get().await {
+        Ok(mut conn) => {
+            let players: Vec<Player> = match players::table.load(&mut conn).await {
+                Ok(data) => data,
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            Json(players).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn player(
@@ -120,26 +120,26 @@ async fn player(
     Path(player_uuid): Path<Uuid>,
     Query(params): Query<SearchParams>,
 ) -> impl IntoResponse {
-    let mut conn = match app_state.database_connection.get().await {
-        Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT);
     let offset = (params.page.unwrap_or(1).max(1) - 1) * limit;
 
-    let stats: Vec<PlayerStats> = match player_stats::table
-        .filter(player_stats::player_uuid.eq(player_uuid))
-        .limit(limit)
-        .offset(offset)
-        .load(&mut conn)
-        .await
-    {
-        Ok(data) => data,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
+    match app_state.database_connection.get().await {
+        Ok(mut conn) => {
+            let stats: Vec<PlayerStats> = match player_stats::table
+                .filter(player_stats::player_uuid.eq(player_uuid))
+                .limit(limit)
+                .offset(offset)
+                .load(&mut conn)
+                .await
+            {
+                Ok(data) => data,
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
 
-    Json(serde_json::json!({ "player_uuid": player_uuid, "stats": stats })).into_response()
+            Json(serde_json::json!({ "player_uuid": player_uuid, "stats": stats })).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn uuid_to_username(

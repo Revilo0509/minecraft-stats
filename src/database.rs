@@ -138,37 +138,45 @@ impl DatabaseConnection {
             let path = entry.path();
 
             if path.extension().map_or(false, |ext| ext == "json") {
-                tasks.push(async move {
-                    let file_stem = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .ok_or_else(|| anyhow!("Failed to get file stem"))?;
-
-                    let player_uuid = Uuid::parse_str(file_stem)?;
-
-                    let stats_content = fs::read_to_string(&path).await?;
-                    let player_stats: StatsFile = serde_json::from_str(&stats_content)?;
-
-                    let player_name = username_cache
-                        .uuid_to_username(&player_uuid)
-                        .unwrap_or_else(|| "Unknown".to_string());
-
-                    self.insert_player(Player {
-                        player_uuid,
-                        name: player_name,
-                    })
-                    .await?;
-
-                    self.insert_stats(player_uuid, player_stats).await?;
-
-                    Ok::<_, anyhow::Error>(())
-                });
+                let db = self.clone();
+                let cache = username_cache.clone();
+                tasks.push(async move { db.process_stats_file(&path, &cache).await });
             }
         }
 
         while let Some(result) = tasks.next().await {
             result?;
         }
+
+        Ok(())
+    }
+
+    pub async fn process_stats_file(
+        &self,
+        path: &Path,
+        username_cache: &UsernameCache,
+    ) -> Result<()> {
+        let file_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow!("Failed to get file stem"))?;
+
+        let player_uuid = Uuid::parse_str(file_stem)?;
+
+        let stats_content = fs::read_to_string(path).await?;
+        let player_stats: StatsFile = serde_json::from_str(&stats_content)?;
+
+        let player_name = username_cache
+            .uuid_to_username(&player_uuid)
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        self.insert_player(Player {
+            player_uuid,
+            name: player_name,
+        })
+        .await?;
+
+        self.insert_stats(player_uuid, player_stats).await?;
 
         Ok(())
     }
