@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::models::{Player, PlayerStats, StatsFile};
 use crate::mojang_utils::UsernameCache;
 
+#[derive(Clone)]
 pub struct DatabaseConnection {
     pool: Pool<AsyncPgConnection>,
 }
