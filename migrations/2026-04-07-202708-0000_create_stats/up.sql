@@ -11,7 +11,8 @@ CREATE TABLE stat_categories (
 CREATE TABLE player_stats (
     player_uuid UUID REFERENCES players(player_uuid),
     stat_categories_id INT REFERENCES stat_categories(id),
-    value NUMERIC NOT NULL,
+    stat_name TEXT NOT NULL,
+    value INTEGER NOT NULL,
 
-    PRIMARY KEY (player_uuid, stat_categories_id)
+    PRIMARY KEY (player_uuid, stat_categories_id, stat_name)
 );

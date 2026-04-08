@@ -1,10 +1,11 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    player_stats (player_uuid, stat_categories_id) {
+    player_stats (player_uuid, stat_categories_id, stat_name) {
         player_uuid -> Uuid,
         stat_categories_id -> Int4,
-        value -> Numeric,
+        stat_name -> Text,
+        value -> Int4,
     }
 }
 

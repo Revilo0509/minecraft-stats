@@ -6,7 +6,6 @@ mod database;
 mod models;
 mod mojang_utils;
 mod schema;
-mod stat_file;
 
 use crate::database::{establish_connection, populate_database};
 use crate::mojang_utils::MojangCache;
