@@ -11,12 +11,12 @@ struct UserCacheEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct MojangCache {
+pub struct UsernameCache {
     uuid_to_name: HashMap<Uuid, String>,
     name_to_uuid: HashMap<String, Uuid>,
 }
 
-impl MojangCache {
+impl UsernameCache {
     pub fn from_usercache(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let entries: Vec<UserCacheEntry> = serde_json::from_str(&content)?;

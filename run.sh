@@ -1,1 +1,1 @@
-diesel database reset && RUST_LOG=debug && RUST_BACKTRANCE=1 && cargo run
+diesel database reset && RUST_LOG=debug && RUST_BACKTRANCE=1 && cargo run --bin syncer

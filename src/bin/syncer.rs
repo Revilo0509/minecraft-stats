@@ -1,22 +1,20 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, sync::Arc};
 
 use dotenvy::dotenv;
+use minecraft_stats::{
+    database::DatabaseConnection,
+    models::{Player, StatsFile},
+    mojang_utils::UsernameCache,
+};
 use notify::RecursiveMode;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-mod database;
-mod models;
-mod mojang_utils;
-mod schema;
-
-use crate::database::{establish_connection, insert_stats, populate_database};
-use crate::mojang_utils::MojangCache;
-
 async fn handle_stats_file_change(
-    database: &mut diesel_async::AsyncPgConnection,
+    db: &DatabaseConnection,
     path: &PathBuf,
-    mojang_cache: &MojangCache,
+    username_cache: &UsernameCache,
 ) {
     let file_stem = match path.file_stem().and_then(|s| s.to_str()) {
         Some(s) => s,
@@ -44,7 +42,7 @@ async fn handle_stats_file_change(
         }
     };
 
-    let player_stats: models::StatsFile = match serde_json::from_str(&stats_content) {
+    let player_stats: StatsFile = match serde_json::from_str(&stats_content) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to parse stats file: {:?}", e);
@@ -52,25 +50,23 @@ async fn handle_stats_file_change(
         }
     };
 
-    let player_name = mojang_cache
+    let player_name = username_cache
         .uuid_to_username(&player_uuid)
         .unwrap_or_else(|| "Unknown".to_string());
 
     log::info!("Updating player: {} ({})", player_name, player_uuid);
 
-    if let Err(e) = database::insert_player(
-        database,
-        models::Player {
+    if let Err(e) = db
+        .insert_player(Player {
             player_uuid,
             name: player_name.clone(),
-        },
-    )
-    .await
+        })
+        .await
     {
         log::error!("Error inserting player {}: {:?}", player_name, e);
     }
 
-    match insert_stats(database, player_uuid, player_stats).await {
+    match db.insert_stats(player_uuid, player_stats).await {
         Ok(_) => log::info!(
             "Successfully synced stats for player: {} ({})",
             player_name,
@@ -81,7 +77,7 @@ async fn handle_stats_file_change(
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
@@ -100,69 +96,53 @@ async fn main() {
     let stats_folder = world_folder.join("stats");
 
     log::info!("Loading usercache from: {:?}", usercache_path);
-    let mojang_cache =
-        MojangCache::from_usercache(&usercache_path).expect("Failed to load usercache.json");
-    log::info!("Loaded {} players from usercache", mojang_cache.len());
+    let username_cache = UsernameCache::from_usercache(&usercache_path)?;
+    log::info!("Loaded {} players from usercache", username_cache.len());
 
-    log::info!("Connecting to database...");
-    let mut database_connection = establish_connection(&database_url).await;
-    log::info!("Connected to database");
+    let database = Arc::new(DatabaseConnection::new(&database_url).await?);
 
     log::info!("Starting initial population of database from stats folder...");
-    match populate_database(&mut database_connection, &stats_folder, &mojang_cache).await {
-        Ok(_) => log::info!("Initial database population complete"),
-        Err(e) => log::error!("Error during initial population: {:?}", e),
-    }
+    database.populate(&stats_folder, &username_cache).await?;
+    log::info!("Initial database population complete");
 
-    let db_url = database_url.clone();
+    let db = database.clone();
     let stats_path = stats_folder.clone();
-    let cache = mojang_cache.clone();
+    let cache = username_cache.clone();
 
-    tokio::spawn(async move {
-        let mut database_connection = establish_connection(&db_url).await;
+    let (tx, mut rx) = mpsc::channel(100);
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-
-        let mut debouncer = match new_debouncer(
-            std::time::Duration::from_millis(200),
-            move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
-                if let Ok(events) = res {
-                    for event in events {
-                        if event.kind == DebouncedEventKind::Any {
-                            let _ = tx.blocking_send(event);
-                        }
+    let mut debouncer = new_debouncer(
+        std::time::Duration::from_millis(200),
+        move |res: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
+            if let Ok(events) = res {
+                for event in events {
+                    if event.kind == DebouncedEventKind::Any {
+                        let _ = tx.blocking_send(event);
                     }
                 }
-            },
-        ) {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to create debouncer: {:?}", e);
-                return;
             }
-        };
+        },
+    )?;
 
-        if let Err(e) = debouncer
-            .watcher()
-            .watch(&stats_path, RecursiveMode::Recursive)
-        {
-            log::error!("Failed to watch stats folder: {:?}", e);
-            return;
-        }
+    debouncer
+        .watcher()
+        .watch(&stats_path, RecursiveMode::Recursive)?;
 
-        log::info!("Watching for changes in {:?}", stats_path);
+    log::info!("Watching for changes in {:?}", stats_path);
 
+    tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             let path = event.path;
-            if path.extension().map_or(false, |ext| ext == "json") {
+            if path.extension().is_some_and(|ext| ext == "json") {
                 log::info!("Detected change in: {:?}", path);
-                handle_stats_file_change(&mut database_connection, &path, &cache).await;
+                handle_stats_file_change(&db, &path, &cache).await;
             }
         }
     });
 
     log::info!("Application ready and running");
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-    }
+    tokio::signal::ctrl_c().await?;
+    log::info!("Shutting down...");
+
+    Ok(())
 }
